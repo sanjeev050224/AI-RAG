@@ -1,7 +1,6 @@
-venv311/
 venv/
+venv311/
 __pycache__/
 *.pyc
 .env
 faiss_index/
-.DS_Store
