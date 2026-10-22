@@ -1,7 +1,7 @@
 # ==========================================================
 # 🎙️ AUDIORAG FINAL VERSION (FIXED - April 2026)
 # Changes Made:
-# ✅ gemini-2.5-flash kept
+# ✅ gemini-3.6-flash kept
 # ✅ embedding-001 REMOVED (causing 404)
 # ✅ Local HuggingFace embeddings added (FREE forever)
 # ✅ No Gemini quota used for embeddings
@@ -10,24 +10,31 @@
 import streamlit as st
 import os
 from io import BytesIO
+from pathlib import Path
 from dotenv import load_dotenv
 from gtts import gTTS
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.prompts import PromptTemplate
-from langchain.chains.question_answering import load_qa_chain
+from langchain_core.prompts import PromptTemplate
+from langchain_classic.chains.question_answering import load_qa_chain
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ✅ LOCAL EMBEDDINGS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # ==========================================================
 # CONFIG
 # ==========================================================
-load_dotenv()
+# Load .env from backend/ first, then from the AI-RAG project root.
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+if not ENV_PATH.exists():
+    ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+load_dotenv(dotenv_path=ENV_PATH)
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -35,7 +42,9 @@ if not API_KEY:
     st.error("GOOGLE_API_KEY not found in .env file")
     st.stop()
 
-genai.configure(api_key=API_KEY)
+# Client for the supported Google Gen AI SDK.
+genai_client = genai.Client(api_key=API_KEY)
+GEMINI_MODEL = "gemini-3.6-flash"
 
 FAISS_PATH = "faiss_index"
 
@@ -57,27 +66,53 @@ MIME_MAP = {
 # ==========================================================
 # STAGE 1 → 2  | TRANSCRIBE AUDIO
 # ==========================================================
-def transcribe_audio(audio_file):
+import time
 
-    audio_bytes = audio_file.read()
-    ext = audio_file.name.split(".")[-1].lower()
+def transcribe_audio(audio_file):
+    audio_bytes = audio_file.getvalue()
+    ext = audio_file.name.rsplit(".", 1)[-1].lower()
     mime = MIME_MAP.get(ext, "audio/mpeg")
 
-    try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+    for attempt in range(3):
+        try:
+            response = genai_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[
+                    types.Part.from_bytes(
+                        data=audio_bytes,
+                        mime_type=mime
+                    ),
+                    "Transcribe this audio exactly. Return only transcript text."
+                ],
+            )
 
-        response = model.generate_content([
-            {
-                "mime_type": mime,
-                "data": audio_bytes
-            },
-            "Transcribe this audio exactly. Return only transcript text."
-        ])
+            transcript = (response.text or "").strip()
 
-        return response.text.strip()
+            if not transcript:
+                raise ValueError("Gemini returned an empty transcript.")
 
-    except Exception as e:
-        raise Exception(f"Transcription Error: {str(e)}")
+            return transcript
+
+        except Exception as e:
+            error_message = str(e)
+            is_temporary = any(
+                code in error_message
+                for code in ("503", "UNAVAILABLE", "429", "500", "502", "504")
+            )
+
+            if is_temporary and attempt < 2:
+                wait_seconds = 5 * (attempt + 1)
+                print(
+                    f"Temporary Gemini error. "
+                    f"Retrying in {wait_seconds} seconds..."
+                )
+                time.sleep(wait_seconds)
+                continue
+
+            raise Exception(
+                f"Transcription failed after {attempt + 1} attempt(s): "
+                f"{error_message}"
+            ) from e
 
 
 # ==========================================================
@@ -160,7 +195,7 @@ Answer:
 def generate_answer(question, docs):
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         temperature=0.2,
         google_api_key=API_KEY
     )
@@ -553,7 +588,7 @@ def main():
             if st.button("⚡  Run Pipeline  (Stages 1 – 4)"):
                 prog = st.progress(0, text="Starting pipeline…")
                 try:
-                    prog.progress(15, text="🎙️  Stage 2 · Transcribing with Gemini 2.5 Flash…")
+                    prog.progress(15, text="🎙️  Stage 2 · Transcribing with Gemini 3.6 Flash…")
                     transcript = transcribe_audio(uploaded)
 
                     prog.progress(50, text="✂️  Stage 3 · Splitting into chunks…")

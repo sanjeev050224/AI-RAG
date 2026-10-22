@@ -3,4 +3,10 @@ venv311/
 __pycache__/
 *.pyc
 .env
+faiss_index/.env
+.venv/
+backend/.env
+__pycache__/
+*.py[cod]
 faiss_index/
+backend/faiss_index/
